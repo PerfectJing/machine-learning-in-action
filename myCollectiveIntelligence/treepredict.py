@@ -19,17 +19,19 @@ my_data=[['slashdot','USA','yes',18,'None'],
 #构造决策树的表达形式
 class decisionnode:
     def __init__(self,col=-1,value=None,results=None,tb=None,fb=None):
-        self.col=col
-        self.value=value
-        self.results=results
-        self.tb=tb
-        self.fb=fb
+        self.col=col #待检验的判断条件所对应的列索引值，对哪一列进行判断
+        self.value=value #为使结果为true，当前列对应的值
+        self.results=results #保存分支的结果，除叶节点外，在其他节点上，该值为None
+        self.tb=tb  #判断条件为true时，当前节点的子节点
+        self.fb=fb  #判断条件为false时，当前节点的子节点
 
 #基于某一特征对数据集拆分，能够处理数值型或名词性数据
+#rows表示样本集，column匹配的属性列索引，value指定列上的数据值
 def divideset(rows,column,value):
-    #定义一函数，数据行属于第一组，返回为true，属于第二组，返回为false
+    #定义一函数，数据行属于第一组还是第二组，返回分别为true和false
     split_function=None
     if isinstance(value,int) or isinstance(value,float):
+        #数值型按大于，小于来区分，字符串为等于，不等于区分
         split_function=lambda row:row[column]>=value #lambda函数也叫匿名函数，即，函数没有具体的名称,而用def创建的方法是有名称的。
 #lambda允许用户快速定义单行函数，当然用户也可以按照典型的函数定义完成函数。lambda的目的就是简化用户定义使用函数的过程。
     else:
@@ -85,7 +87,7 @@ def buildtree(rows,scoref=entropy):
     best_sets=None
 
     column_count=len(rows[0])-1 #列数
-    for col in range(0,column_count):
+    for col in range(0,column_count):#遍历每一列
         #每列的可能取不同值构成的序列
         column_values={ }
         for row in rows:
@@ -102,8 +104,8 @@ def buildtree(rows,scoref=entropy):
                 best_sets=(set1,set2)
         #创建子分支
     if best_gain>0:
-        trueBranch=buildtree(best_sets[0])
-        falseBranch=buildtree(best_sets[1])
+        trueBranch=buildtree(best_sets[0]) #创建左分支
+        falseBranch=buildtree(best_sets[1]) #创建右分支
         return decisionnode(col=best_criteria[0],value=best_criteria[1],tb=trueBranch,fb=falseBranch)
     else:
         return decisionnode(results=uniquecounts(rows))
@@ -119,9 +121,11 @@ def printtree(tree,indent=''):
         print(indent+'T->',printtree(tree.tb,indent+' '))
         print(indent+'F->',printtree(tree.fb,indent+' '))
 
+#树的宽度
 def getwidth(tree):
     if tree.tb==None and tree.fb==None:return 1
     return getwidth(tree.tb)+getwidth(tree.fb)
+#树的深度
 def getdepth(tree):
     if tree.tb==None and tree.fb==None:return 0
     return max(getdepth(tree.tb),getdepth(tree.fb))+1
@@ -133,9 +137,9 @@ def drawtree(tree,jpeg='tree.jpg'):
     img=Image.new('RGB',(w,h),(255,255,255))
     draw=ImageDraw.Draw(img)
 
-    drawnode(draw,tree,w/2,20)
+    drawnode(draw,tree,w/2,20) #根节点坐标
     img.save(jpeg,'JPEG')
-
+#递归的方式绘制决策树的节点
 def drawnode(draw,tree,x,y):
     if tree.results==None:
         #得到每个分支的宽度
@@ -171,3 +175,70 @@ def classify(observation,tree):
             if v==tree.value:branch=tree.tb
             else:branch=tree.fb
         return classify(observation,branch)
+
+#剪枝，margain
+def prune(tree,mingain):
+    #如果分支不是叶结点，则对其进行剪枝操作
+    if tree.tb.results==None: #none就表示不是叶节点
+        prune(tree.tb,mingain)
+    if tree.fb.results==None:
+        prune(tree.fb,mingain)
+
+    #如果两个子支都是叶节点，则判断他们是否需要合并
+    if tree.tb.results!=None and tree.fb.results!=None: #就是叶节点
+        #构造合并后的数据集
+        tb,fb=[],[]
+        for v,c in tree.tb.results.items():
+            tb+=[[v]]*c #
+        for v,c in tree.fb.results.items():
+            fb+=[[v]]*c #
+        #检查熵的减少情况
+        delta=entropy(tb+fb)-(entropy(tb)+entropy(fb)/2)
+
+        if delta<mingain:
+            #合并分支
+            tree.tb,tree.fb=None,None
+            tree.results=uniquecounts(tb+fb)
+
+#处理缺失数据,observation信息缺失的数据项
+def mdclassify(observation,tree):
+    if tree.results!=None: #叶节点
+        return tree.results
+    else:
+        v=observation[tree.col] #获取数据的列
+        if v==None: #若列数据缺失，对左右子树分别分类
+            tr,fr=mdclassify(observation,tree.tb),mdclassify(observation,tree.fb)
+            #在某属性上没有缺失值的总样本数
+            tcount=sum(tr.values())
+            fcount=sum(fr.values())
+            #占总样本的比例，得到左右子树的权重
+            tw=float(tcount)/(tcount+fcount)
+            fw=float(fcount)/(tcount+fcount)
+            result={}
+            #左右子树的加权
+            for k,v in tr.items():result[k]=v*tw
+            for k,v in fr.items():
+                if k not in result:result[k]=0
+                result[k]+=v*fw
+            return result
+        #没有缺失值，继续分类
+        else:
+            if isinstance(v,int) or isinstance(v,float):
+                if v>=tree.value:branch=tree.tb
+                else:branch=tree.fb
+            else:
+                if v==tree.value:branch=tree.tb
+                else:branch=tree.fb
+            return mdclassify(observation,branch)
+
+#处理数值型结果
+#使用方差作为评价函数来取代熵或基尼不纯度
+def variance(rows):
+    if len(rows)==0:return 0
+    data=[float(row[len(row)-1]) for row in rows]
+    mean=sum(data)/len(data)
+    variance=sum([(d-mean)**2 for d in data])/len(data)
+    return variance
+
+
+#tree=treepredict.buildtree(treepredict.my_data)
